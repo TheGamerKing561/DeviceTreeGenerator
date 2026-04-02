@@ -16,6 +16,8 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -29,7 +31,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full erofs-utils lz4 brotli liblzma-dev wget android-sdk-libsparse-utils
+          sudo apt-get install -y erofs-utils lz4 brotli liblzma-dev wget android-sdk-libsparse-utils
           pip3 install dumpyara aospdtgen
 
       - name: Dump ROM
