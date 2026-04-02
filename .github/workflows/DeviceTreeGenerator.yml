@@ -37,7 +37,7 @@ jobs:
       - name: Dump ROM
         run: |
           mkdir -p dump
-          wget -q "${{ github.event.inputs.rom_url }}" -O rom.zip
+          wget "${{ github.event.inputs.rom_url }}" -O rom.zip
           python3 -m dumpyara rom.zip -o dump
           rm rom.zip
 
