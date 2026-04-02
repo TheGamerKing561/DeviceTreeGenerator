@@ -50,48 +50,44 @@ jobs:
         run: |
           FILE="android/device/${{ github.event.inputs.brand }}/${{ github.event.inputs.device_codename }}/proprietary-files.txt"
           DUMP="$GITHUB_WORKSPACE/dump"
+      
           TMP=$(mktemp)
       
-          echo "Fixing proprietary-files.txt with priority: product > vendor > system"
+          declare -A seen
       
           while IFS= read -r line; do
-            # Preserve comments & empty lines
+            # Keep comments/empty
             if [[ "$line" =~ ^#.*$ || -z "$line" ]]; then
               echo "$line" >> $TMP
               continue
             fi
       
-            # Skip already-correct entries
-            if [[ "$line" =~ ^(system|vendor|product)/ ]]; then
-              echo "$line" >> $TMP
-              continue
+            resolved="$line"
+      
+            # Only fix if missing prefix
+            if [[ ! "$line" =~ ^(system|vendor|product)/ ]]; then
+              if [ -f "$DUMP/product/$line" ]; then
+                resolved="product/$line"
+              elif [ -f "$DUMP/vendor/$line" ]; then
+                resolved="vendor/$line"
+              elif [ -f "$DUMP/system/$line" ]; then
+                resolved="system/$line"
+              elif [ -f "$DUMP/system/system/$line" ]; then
+                resolved="system/$line"
+              else
+                resolved="# UNRESOLVED: $line"
+              fi
             fi
       
-            resolved=""
-      
-            # Priority: product → vendor → system
-            if [ -f "$DUMP/product/$line" ]; then
-              resolved="product/$line"
-            elif [ -f "$DUMP/vendor/$line" ]; then
-              resolved="vendor/$line"
-            elif [ -f "$DUMP/system/$line" ]; then
-              resolved="system/$line"
-            elif [ -f "$DUMP/system/system/$line" ]; then
-              resolved="system/$line"
-            fi
-      
-            if [ -n "$resolved" ]; then
+            # Deduplicate
+            if [[ -z "${seen[$resolved]}" ]]; then
               echo "$resolved" >> $TMP
-            else
-              echo "# UNRESOLVED: $line" >> $TMP
+              seen[$resolved]=1
             fi
       
           done < "$FILE"
       
           mv $TMP "$FILE"
-      
-          echo "Done fixing proprietary-files.txt"
-      
 
       - name: Clone Extract Tools
         run: |
