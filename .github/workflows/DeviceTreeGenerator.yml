@@ -4,20 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       rom_url:
-        description: 'Direct Link to ROM'
+        description: 'Direct ROM download link'
         required: true
       device_codename:
-        description: 'Device Codename'
+        description: 'Device codename (e.g. whyred)'
         required: true
       brand:
-        description: 'Brand'
+        description: 'OEM/vendor name (e.g. xiaomi)'
         required: true
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -25,55 +26,66 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y p7zip-full erofs-utils lz4 brotli liblzma-dev wget android-sdk-libsparse-utils
           pip3 install dumpyara aospdtgen
 
-      - name: Download and Dump ROM
+      - name: Dump ROM
         run: |
-          mkdir -p input output/dump
-          wget -q "${{ github.event.inputs.rom_url }}" -O input/rom_file.zip
-          python3 -m dumpyara input/rom_file.zip -o output/dump
-          rm input/rom_file.zip # Save space immediately
+          mkdir -p dump
+          wget -q "${{ github.event.inputs.rom_url }}" -O rom.zip
+          python3 -m dumpyara rom.zip -o dump
+          rm rom.zip
 
       - name: Generate Device Tree
         run: |
-          mkdir -p output/device_tree
-          python3 -m aospdtgen output/dump -o output/device_tree
+          mkdir -p android/device/${{ github.event.inputs.brand }}
+          python3 -m aospdtgen dump -o android/device/${{ github.event.inputs.brand }}
 
-      - name: Setup LineageOS Extract-Utils
+      - name: Clone Extract Tools
         run: |
-          git clone https://github.com/LineageOS/android_tools_extract-utils.git ~/extract-utils
-          echo "PYTHONPATH=$PYTHONPATH:~/extract-utils" >> $GITHUB_ENV
+          mkdir -p android/tools android/prebuilts
+          git clone https://github.com/LineageOS/android_tools_extract-utils android/tools/extract-utils
+          git clone https://github.com/LineageOS/android_prebuilts_extract-tools android/prebuilts/extract-tools
 
-      - name: Generate Vendor Tree (Python)
+      - name: Verify Device Tree
         run: |
-          DT_PATH=$(find output/device_tree -name "${{ github.event.inputs.device_codename }}")
-          cd "$DT_PATH"
-          export PATH=$PATH:~/extract-utils
-          # Running the python extractor pointing to the dump
-          python3 extract-files.py "$GITHUB_WORKSPACE/output/dump"
+          CODENAME="${{ github.event.inputs.device_codename }}"
+          BRAND="${{ github.event.inputs.brand }}"
+          DT_PATH=$(find android/device/$BRAND -type d -name "$CODENAME" | head -n 1)
 
-      - name: Compress and Clean
-        run: |
-          # Create Zip for Device Tree
-          cd output/device_tree
-          7z a -tzip ../../${{ github.event.inputs.device_codename }}_dt.zip ./*
-          cd ../..
-
-          # Create Zip for Vendor Tree
-          # Paths are typically: vendor/brand/codename
-          VENDOR_PATH="vendor/${{ github.event.inputs.brand }}/${{ github.event.inputs.device_codename }}"
-          if [ -d "$VENDOR_PATH" ]; then
-            cd "$VENDOR_PATH"
-            7z a -tzip ../../../${{ github.event.inputs.device_codename }}_vendor.zip ./*
-            cd ../../../
+          if [ -z "$DT_PATH" ]; then
+            echo "Device tree not found!"
+            exit 1
           fi
-          
-          # Delete the massive dump folder to speed up artifact upload
-          rm -rf output/dump
+
+      - name: Extract Vendor Blobs
+        run: |
+          CODENAME="${{ github.event.inputs.device_codename }}"
+          BRAND="${{ github.event.inputs.brand }}"
+
+          cd android/device/$BRAND/$CODENAME
+          export PYTHONPATH=$GITHUB_WORKSPACE/android/tools/extract-utils
+          python3 extract-files.py "$GITHUB_WORKSPACE/dump"
+
+      - name: Compress Results
+        run: |
+          CODENAME="${{ github.event.inputs.device_codename }}"
+          BRAND="${{ github.event.inputs.brand }}"
+
+          cd android/device/$BRAND/$CODENAME
+          7z a -tzip $GITHUB_WORKSPACE/${CODENAME}_dt.zip ./*
+          cd $GITHUB_WORKSPACE
+
+          if [ -d "android/vendor/$BRAND/$CODENAME" ]; then
+            cd android/vendor/$BRAND/$CODENAME
+            7z a -tzip $GITHUB_WORKSPACE/${CODENAME}_vendor.zip ./*
+            cd $GITHUB_WORKSPACE
+          fi
+
+          rm -rf dump
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
