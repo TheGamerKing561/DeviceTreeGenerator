@@ -175,7 +175,7 @@ jobs:
           export PYTHONPATH=$GITHUB_WORKSPACE/android/tools/extract-utils
           python3 extract-files.py "$GITHUB_WORKSPACE/dump"
 
-      - name: Generate TWRP Device Tree
+      - name: Generate TWRP Device Tree with twrpdtgen
         id: twrp_dt
         run: |
           IMG=""
@@ -201,7 +201,7 @@ jobs:
           python3 -m twrpdtgen "$GITHUB_WORKSPACE/$IMG" -o "recovery/device"
       
           # Detect the generated device tree folder
-          GENERATED_DT=$(find recovery/device -mindepth 1 -maxdepth 2 -type d | head -n 1)
+          GENERATED_DT=$(find recovery/device -mindepth 2 -type d | head -n 1)
           if [ -z "$GENERATED_DT" ]; then
             echo "[!] TWRP device tree not found!"
             exit 1
