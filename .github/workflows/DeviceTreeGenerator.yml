@@ -297,7 +297,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "Generated device trees for ${{ env.BRAND }} ${{ env.CODENAME }}"
           body: |
-            Device Tree and Vendor Tree for ${{ env.CODENAME }}.
+            Generated Device Trees/Vendor Tree for ${{ env.CODENAME }}.
             - Brand: ${{ env.BRAND }}
             - Device Codename: ${{ env.CODENAME }}
             - Generated trees: ${{ github.event.inputs.generation_type }}
