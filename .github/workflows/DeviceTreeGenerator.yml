@@ -197,56 +197,39 @@ jobs:
             git clone https://github.com/twrpdtgen/twrpdtgen.git
           fi
       
-          # Use AOSP-detected brand/codename if available
-          if [ -n "${BRAND}" ] && [ -n "${CODENAME}" ]; then
-            echo "[*] Using AOSP detected brand/codename: $BRAND / $CODENAME"
-            FINAL_PATH="recovery/device/$BRAND/$CODENAME"
-            mkdir -p "recovery/device/$BRAND"
+           # Generate TWRP device tree directly under recovery/device
+          python3 -m twrpdtgen "$GITHUB_WORKSPACE/$IMG" -o "recovery/device"
       
-            # Run TWRP DT directly into final path
-            python3 -m twrpdtgen "$GITHUB_WORKSPACE/$IMG" -o "$FINAL_PATH"
-            echo "[*] TWRP device tree generated at: $FINAL_PATH"
-          else
-            # Fallback: generate in temp folder and detect brand/codename from TWRP DT
-            mkdir -p recovery/device/tmp
-            TEMP_DIR="recovery/device/tmp/device"
-      
-            python3 -m twrpdtgen "$GITHUB_WORKSPACE/$IMG" -o "$TEMP_DIR"
-      
-            # Detect generated folder
-            DT_PATH=$(find "$TEMP_DIR" -mindepth 1 -maxdepth 2 -type d | head -n 1)
-            if [ -z "$DT_PATH" ]; then
-              echo "[!] TWRP device tree not found!"
-              exit 1
-            fi
-      
-            BOARD_CONFIG="$DT_PATH/BoardConfig.mk"
-            if [ ! -f "$BOARD_CONFIG" ]; then
-              echo "[!] BoardConfig.mk missing in TWRP tree!"
-              exit 1
-            fi
-      
-            # Extract DEVICE_PATH
-            DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
-            BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
-            CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
-      
-            if [ -z "$BRAND" ] || [ -z "$CODENAME" ]; then
-              echo "[!] Failed to detect brand/codename from TWRP tree!"
-              exit 1
-            fi
-      
-            FINAL_PATH="recovery/device/$BRAND/$CODENAME"
-            mkdir -p "recovery/device/$BRAND"
-            mv "$DT_PATH" "$FINAL_PATH"
-            rm -rf recovery/device/tmp
-      
-            echo "[*] TWRP device tree generated at: $FINAL_PATH"
+          # Detect the generated device tree folder
+          GENERATED_DT=$(find recovery/device -mindepth 1 -maxdepth 2 -type d | head -n 1)
+          if [ -z "$GENERATED_DT" ]; then
+            echo "[!] TWRP device tree not found!"
+            exit 1
           fi
       
-          # Export global environment variables for workflow-wide use
-          echo "BRAND=$BRAND" >> $GITHUB_ENV
-          echo "CODENAME=$CODENAME" >> $GITHUB_ENV
+          # Extract brand/codename from BoardConfig.mk
+          BOARD_CONFIG="$GENERATED_DT/BoardConfig.mk"
+          if [ ! -f "$BOARD_CONFIG" ]; then
+            echo "[!] BoardConfig.mk missing in TWRP tree!"
+            exit 1
+          fi
+      
+          DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
+          TWRP_BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
+          TWRP_CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
+      
+          if [ -z "$BRAND" ] || [ -z "$CODENAME" ]; then
+            echo "[!] Failed to detect brand/codename from TWRP tree!"
+            exit 1
+          fi
+      
+          echo "[*] Detected TWRP device tree: $TWRP_BRAND / $TWRP_CODENAME"
+      
+          # Export to GitHub environment
+          echo "TWRP_BRAND=$BRAND" >> $GITHUB_ENV
+          echo "TWRP_CODENAME=$CODENAME" >> $GITHUB_ENV
+      
+          echo "[*] TWRP device tree generated at: $GENERATED_DT"
 
       - name: Compress Device Tree
         run: |
