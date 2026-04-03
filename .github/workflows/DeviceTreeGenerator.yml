@@ -295,7 +295,7 @@ jobs:
       - name: Generate Tag
         id: tag
         run: |
-          echo "tag=${{ steps.detect_device_info.outputs.codename }}-$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+          echo "tag=$CODENAME-$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
 
       - name: Create Release and Upload Device & Vendor Trees
         uses: softprops/action-gh-release@v2
