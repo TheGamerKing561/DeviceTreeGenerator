@@ -50,9 +50,12 @@ jobs:
           mkdir -p dump
 
           if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
-            wget -q "${{ github.event.inputs.rom_url }}" -O rom.zip
-            python3 -m dumpyara rom.zip -o dump
-            rm rom.zip
+            wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
+
+            ROM_FILE=$(ls -t | head -n 1)
+            
+            python3 -m dumpyara "$ROM_FILE" -o dump
+            rm "$ROM_FILE"
           else
             echo "No ROM URL provided. Skipping ROM download and dump."
           fi
