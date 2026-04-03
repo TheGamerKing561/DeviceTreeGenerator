@@ -47,12 +47,13 @@ jobs:
 
       - name: Download and dump ROM with dumpyara
         run: |
-          mkdir -p dump
 
           if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
             wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
 
             ROM_FILE=$(ls -t | head -n 1)
+
+            mkdir -p dump
             
             python3 -m dumpyara "$ROM_FILE" -o dump
             rm "$ROM_FILE"
