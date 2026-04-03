@@ -6,12 +6,6 @@ on:
       rom_url:
         description: 'Direct ROM download link'
         required: true
-      device_codename:
-        description: 'Device codename (e.g. whyred)'
-        required: true
-      brand:
-        description: 'OEM/vendor name (e.g. xiaomi)'
-        required: true
 
 jobs:
   generate:
@@ -43,12 +37,78 @@ jobs:
 
       - name: Generate Device Tree
         run: |
-          mkdir -p android/device/${{ github.event.inputs.brand }}
-          python3 -m aospdtgen dump -o android/device/${{ github.event.inputs.brand }}/${{ github.event.inputs.device_codename }}
+          mkdir -p android/device/tmp/device
+          python3 -m aospdtgen dump -o android/device/tmp/device
+      
+      - name: Detect Device Info and Relocate Device Tree
+        id: detect_device_info
+        run: |
+          # Set base directory for temporary device tree
+          BASE="android/device/tmp"
+      
+          # Find the generated device tree folder
+          DT_PATH=$(find "$BASE" -mindepth 1 -maxdepth 2 -type d | head -n 1)
+      
+          if [ -z "$DT_PATH" ]; then
+            echo "Device tree not found!"
+            exit 1
+          fi
+      
+          echo "Generated DT path: $DT_PATH"
+      
+          # BoardConfig.mk should be inside the device tree directory
+          BOARD_CONFIG="$DT_PATH/BoardConfig.mk"
+      
+          if [ ! -f "$BOARD_CONFIG" ]; then
+            echo "BoardConfig.mk not found!"
+            exit 1
+          fi
+      
+          # Extract DEVICE_PATH from BoardConfig.mk
+          DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
+      
+          if [ -z "$DEVICE_PATH" ]; then
+            echo "DEVICE_PATH not found in BoardConfig.mk"
+            exit 1
+          fi
+      
+          echo "Detected DEVICE_PATH: $DEVICE_PATH"
+      
+          # Extract brand and codename from DEVICE_PATH
+          BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
+          CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
+      
+          if [ -z "$BRAND" ] || [ -z "$CODENAME" ]; then
+            echo "Failed to parse brand/codename"
+            exit 1
+          fi
+      
+          echo "Brand: $BRAND"
+          echo "Codename: $CODENAME"
+      
+          # Set output variables to be used later in the workflow
+          echo "brand=$BRAND" >> $GITHUB_OUTPUT
+          echo "codename=$CODENAME" >> $GITHUB_OUTPUT
+      
+          # Define the correct final path for the device tree
+          FINAL_PATH="android/device/$BRAND/$CODENAME"
+      
+          # Create the final directory path
+          mkdir -p "android/device/$BRAND"
+      
+          # Move the generated device tree to the correct path
+          mv "$DT_PATH" "$FINAL_PATH"
+      
+          echo "Moved device tree to: $FINAL_PATH"
+      
+          # Clean up the temporary directory
+          rm -rf "$BASE"
+      
+          echo "Cleaned up temporary device tree path: $BASE"
 
       - name: Auto-fix proprietary-files.txt
         run: |
-          FILE="android/device/${{ github.event.inputs.brand }}/${{ github.event.inputs.device_codename }}/proprietary-files.txt"
+          FILE="android/device/${{ steps.detect_device_info.outputs.brand }}/${{ steps.detect_device_info.outputs.codename }}/proprietary-files.txt"
           DUMP="$GITHUB_WORKSPACE/dump"
       
           TMP=$(mktemp)
@@ -97,8 +157,8 @@ jobs:
 
       - name: Verify Device Tree
         run: |
-          CODENAME="${{ github.event.inputs.device_codename }}"
-          BRAND="${{ github.event.inputs.brand }}"
+          CODENAME="${{ steps.detect_device_info.outputs.codename }}"
+          BRAND="${{ steps.detect_device_info.outputs.brand }}"
           DT_PATH=$(find android/device/$BRAND -type d -name "$CODENAME" | head -n 1)
 
           if [ -z "$DT_PATH" ]; then
@@ -108,8 +168,8 @@ jobs:
 
       - name: Extract Vendor Blobs
         run: |
-          CODENAME="${{ github.event.inputs.device_codename }}"
-          BRAND="${{ github.event.inputs.brand }}"
+          CODENAME="${{ steps.detect_device_info.outputs.codename }}"
+          BRAND="${{ steps.detect_device_info.outputs.brand }}"
 
           cd android/device/$BRAND/$CODENAME
           export PYTHONPATH=$GITHUB_WORKSPACE/android/tools/extract-utils
@@ -117,21 +177,21 @@ jobs:
 
       - name: Compress Device Tree
         run: |
-          CODENAME="${{ github.event.inputs.device_codename }}"
-          BRAND="${{ github.event.inputs.brand }}"
+          CODENAME="${{ steps.detect_device_info.outputs.codename }}"
+          BRAND="${{ steps.detect_device_info.outputs.brand }}"
 
           cd android/device/$BRAND/$CODENAME
-          7z a -tzip $GITHUB_WORKSPACE/${CODENAME}_dt.zip ./*
+          7z a -tzip $GITHUB_WORKSPACE/android_device_${BRAND}_${CODENAME}.zip ./*
           cd $GITHUB_WORKSPACE
 
       - name: Compress Vendor Tree
         run: |
-          CODENAME="${{ github.event.inputs.device_codename }}"
-          BRAND="${{ github.event.inputs.brand }}"
+          CODENAME="${{ steps.detect_device_info.outputs.codename }}"
+          BRAND="${{ steps.detect_device_info.outputs.brand }}"
 
           if [ -d "android/vendor/$BRAND/$CODENAME" ]; then
             cd android/vendor/$BRAND/$CODENAME
-            7z a -tzip $GITHUB_WORKSPACE/${CODENAME}_vendor.zip ./*
+            7z a -tzip $GITHUB_WORKSPACE/proprietary_vendor_${BRAND}_${CODENAME}.zip ./*
             cd $GITHUB_WORKSPACE
           fi
 
@@ -140,20 +200,22 @@ jobs:
       - name: Generate Tag
         id: tag
         run: |
-          echo "tag=${{ github.event.inputs.device_codename }}-$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+          echo "tag=${{ steps.detect_device_info.outputs.codename }}-$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
 
       - name: Create Release and Upload Device & Vendor Trees
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Generated device trees for ${{ github.event.inputs.brand }} ${{ github.event.inputs.device_codename }}"
+          name: "Generated device trees for ${{ steps.detect_device_info.outputs.brand }} ${{ steps.detect_device_info.outputs.codename }}"
           body: |
-            Device Tree and Vendor Tree for ${{ github.event.inputs.device_codename }}.
+            Device Tree and Vendor Tree for ${{ steps.detect_device_info.outputs.codename }}.
 
-            - Brand: ${{ github.event.inputs.brand }}
-            - Device Codename: ${{ github.event.inputs.device_codename }}
+            - Brand: ${{ steps.detect_device_info.outputs.brand }}
+            - Device Codename: ${{ steps.detect_device_info.outputs.codename }}
+            - Dumped ROM link: ${{ github.event.inputs.rom_url }}
+
           files: |
-            *_dt.zip
-            *_vendor.zip
+            android_device_*.zip
+            proprietary_vendor_*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
