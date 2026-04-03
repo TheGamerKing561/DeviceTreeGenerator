@@ -234,6 +234,14 @@ jobs:
           echo "TWRP_BRAND=$TWRP_BRAND" >> $GITHUB_ENV
           echo "TWRP_CODENAME=$TWRP_CODENAME" >> $GITHUB_ENV
 
+          # If BRAND/CODENAME are not set, use TWRP values
+          if [ -z "${BRAND}" ]; then
+            echo "BRAND=$TWRP_BRAND" >> $GITHUB_ENV
+          fi
+          if [ -z "${CODENAME}" ]; then
+            echo "CODENAME=$TWRP_CODENAME" >> $GITHUB_ENV
+          fi
+
       - name: Compress AOSP Device Tree
         if: contains(github.event.inputs.generation_type, 'device')
         run: |
