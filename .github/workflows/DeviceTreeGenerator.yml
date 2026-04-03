@@ -4,8 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       rom_url:
-        description: 'Direct ROM download link'
+        description: 'Direct ROM download link (Default: none)'
         required: true
+        default: "none"
+      generation_type:
+        description: 'Select what to generate'
+        required: true
+        default: "device+vendor+recovery"
+        type: choice
+        options:
+          - device_only
+          - recovery_only
+          - device+vendor
+          - device+recovery
+          - device+vendor+recovery
+      recovery_image_path:
+        description: 'Path to custom recovery.img or boot.img for recovery device tree generation (Optional)'
+        required: false
+        default: ""
 
 jobs:
   generate:
@@ -25,106 +41,80 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y erofs-utils lz4 brotli liblzma-dev wget android-sdk-libsparse-utils cpio
+          sudo apt-get install -y erofs-utils lz4 brotli liblzma-dev wget android-sdk-libsparse-utils cpio p7zip-full
+
           pip3 install dumpyara aospdtgen twrpdtgen
 
       - name: Download and dump ROM with dumpyara
         run: |
           mkdir -p dump
-          wget -q "${{ github.event.inputs.rom_url }}" -O rom.zip
-          python3 -m dumpyara rom.zip -o dump
-          rm rom.zip
+
+          if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
+            wget -q "${{ github.event.inputs.rom_url }}" -O rom.zip
+            python3 -m dumpyara rom.zip -o dump
+            rm rom.zip
+          else
+            echo "No ROM URL provided. Skipping ROM download and dump."
+          fi
 
       - name: Generate AOSP Device Tree with aospdtgen
+        if: contains(github.event.inputs.generation_type, 'device')
         run: |
           mkdir -p android/device/tmp/device
+
           python3 -m aospdtgen dump -o android/device/tmp/device
-      
+
       - name: Detect Device Info and Relocate Device Tree
+        if: contains(github.event.inputs.generation_type, 'device')
         id: detect_device_info
         run: |
-          # Set base directory for temporary device tree
           BASE="android/device/tmp"
-      
-          # Find the generated device tree folder
+
           DT_PATH=$(find "$BASE" -mindepth 1 -maxdepth 2 -type d | head -n 1)
-      
+
           if [ -z "$DT_PATH" ]; then
             echo "Device tree not found!"
             exit 1
           fi
-      
-          echo "Generated DT path: $DT_PATH"
-      
-          # BoardConfig.mk should be inside the device tree directory
+
           BOARD_CONFIG="$DT_PATH/BoardConfig.mk"
-      
+
           if [ ! -f "$BOARD_CONFIG" ]; then
             echo "BoardConfig.mk not found!"
             exit 1
           fi
-      
-          # Extract DEVICE_PATH from BoardConfig.mk
+
           DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
-      
-          if [ -z "$DEVICE_PATH" ]; then
-            echo "DEVICE_PATH not found in BoardConfig.mk"
-            exit 1
-          fi
-      
-          echo "Detected DEVICE_PATH: $DEVICE_PATH"
-      
-          # Extract brand and codename from DEVICE_PATH
+
           BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
           CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
-      
-          if [ -z "$BRAND" ] || [ -z "$CODENAME" ]; then
-            echo "Failed to parse brand/codename"
-            exit 1
-          fi
-      
-          echo "Brand: $BRAND"
-          echo "Codename: $CODENAME"
-      
-          # Set output variables to be used later in the workflow
+
           echo "BRAND=$BRAND" >> $GITHUB_ENV
           echo "CODENAME=$CODENAME" >> $GITHUB_ENV
-      
-          # Define the correct final path for the device tree
+
           FINAL_PATH="android/device/$BRAND/$CODENAME"
-      
-          # Create the final directory path
           mkdir -p "android/device/$BRAND"
-      
-          # Move the generated device tree to the correct path
+
           mv "$DT_PATH" "$FINAL_PATH"
-      
-          echo "Moved device tree to: $FINAL_PATH"
-      
-          # Clean up the temporary directory
+
           rm -rf "$BASE"
-      
-          echo "Cleaned up temporary device tree path: $BASE"
 
       - name: Auto-fix proprietary-files.txt
         run: |
           FILE="android/device/$BRAND/$CODENAME/proprietary-files.txt"
           DUMP="$GITHUB_WORKSPACE/dump"
-      
           TMP=$(mktemp)
-      
           declare -A seen
-      
+
           while IFS= read -r line; do
-            # Keep comments/empty
+
             if [[ "$line" =~ ^#.*$ || -z "$line" ]]; then
               echo "$line" >> $TMP
               continue
             fi
-      
+
             resolved="$line"
-      
-            # Only fix if missing prefix
+
             if [[ ! "$line" =~ ^(system|vendor|product)/ ]]; then
               if [ -f "$DUMP/product/$line" ]; then
                 resolved="product/$line"
@@ -138,27 +128,30 @@ jobs:
                 resolved="# UNRESOLVED: $line"
               fi
             fi
-      
-            # Deduplicate
+
             if [[ -z "${seen[$resolved]}" ]]; then
               echo "$resolved" >> $TMP
               seen[$resolved]=1
             fi
-      
+
           done < "$FILE"
-      
+
           mv $TMP "$FILE"
 
       - name: Clone Extract Tools from LineageOS
+        if: contains(github.event.inputs.generation_type, 'vendor')
         run: |
           mkdir -p android/tools android/prebuilts
+
           git clone https://github.com/LineageOS/android_tools_extract-utils android/tools/extract-utils
           git clone https://github.com/LineageOS/android_prebuilts_extract-tools android/prebuilts/extract-tools
 
       - name: Verify Device Tree Existence
+        if: contains(github.event.inputs.generation_type, 'device')
         run: |
           CODENAME=$CODENAME
           BRAND=$BRAND
+
           DT_PATH=$(find android/device/$BRAND -type d -name "$CODENAME" | head -n 1)
 
           if [ -z "$DT_PATH" ]; then
@@ -167,71 +160,81 @@ jobs:
           fi
 
       - name: Extract Vendor Blobs
+        if: contains(github.event.inputs.generation_type, 'vendor')
         run: |
           CODENAME=$CODENAME
           BRAND=$BRAND
 
           cd android/device/$BRAND/$CODENAME
           export PYTHONPATH=$GITHUB_WORKSPACE/android/tools/extract-utils
+
           python3 extract-files.py "$GITHUB_WORKSPACE/dump"
 
       - name: Generate TWRP Device Tree with twrpdtgen
+        if: contains(github.event.inputs.generation_type, 'recovery')
         id: twrp_dt
         run: |
           IMG=""
-      
-          # Priority: recovery.img
-          if [ -f dump/recovery.img ]; then
-            IMG="dump/recovery.img"
-            echo "[*] Using recovery.img"
-          elif [ -f dump/boot.img ]; then
-            IMG="dump/boot.img"
-            echo "[*] recovery.img not found, using boot.img (fallback)"
+
+          if [ -n "${{ github.event.inputs.recovery_image_path }}" ]; then
+            echo "[*] Custom recovery image provided: ${github.event.inputs.recovery_image_path}"
+            if [ -f dump/recovery.img ] || [ -f dump/boot.img ]; then
+              echo "[*] Both custom image and dumped ROM images are available. Using dumped ROM image for TWRP generation."
+            fi
+            if [ -f dump/recovery.img ]; then
+              IMG="dump/recovery.img"
+              echo "[*] Using recovery.img from dumped ROM"
+            elif [ -f dump/boot.img ]; then
+              IMG="dump/boot.img"
+              echo "[*] Using boot.img from dumped ROM (fallback)"
+            else
+              IMG="${{ github.event.inputs.recovery_image_path }}"
+              echo "[*] Using provided custom image as fallback."
+            fi
           else
-            echo "[*] No recovery/boot image found, skipping TWRP device tree generation"
-            exit 0
+            if [ -f dump/recovery.img ]; then
+              IMG="dump/recovery.img"
+              echo "[*] Using recovery.img from dumped ROM"
+            elif [ -f dump/boot.img ]; then
+              IMG="dump/boot.img"
+              echo "[*] Using boot.img from dumped ROM (fallback)"
+            else
+              echo "[*] No recovery/boot image found for TWRP generation"
+              exit 0
+            fi
           fi
-      
-          # Clone twrpdtgen if not already present
+
           if [ ! -d "twrpdtgen" ]; then
             git clone https://github.com/twrpdtgen/twrpdtgen.git
           fi
-      
-           # Generate TWRP device tree directly under recovery/device
+
           python3 -m twrpdtgen "$GITHUB_WORKSPACE/$IMG" -o "recovery/device"
-      
-          # Detect the generated device tree folder
+
           GENERATED_DT=$(find recovery/device -mindepth 2 -type d | head -n 1)
+
           if [ -z "$GENERATED_DT" ]; then
             echo "[!] TWRP device tree not found!"
             exit 1
           fi
-      
-          # Extract brand/codename from BoardConfig.mk
+
           BOARD_CONFIG="$GENERATED_DT/BoardConfig.mk"
+
           if [ ! -f "$BOARD_CONFIG" ]; then
             echo "[!] BoardConfig.mk missing in TWRP tree!"
             exit 1
           fi
-      
+
           DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
           TWRP_BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
           TWRP_CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
-      
-          if [ -z "$BRAND" ] || [ -z "$CODENAME" ]; then
-            echo "[!] Failed to detect brand/codename from TWRP tree!"
-            exit 1
-          fi
-      
+
           echo "[*] Detected TWRP device tree: $TWRP_BRAND / $TWRP_CODENAME"
-      
-          # Export to GitHub environment
-          echo "TWRP_BRAND=$BRAND" >> $GITHUB_ENV
-          echo "TWRP_CODENAME=$CODENAME" >> $GITHUB_ENV
-      
-          echo "[*] TWRP device tree generated at: $GENERATED_DT"
+
+          echo "TWRP_BRAND=$TWRP_BRAND" >> $GITHUB_ENV
+          echo "TWRP_CODENAME=$TWRP_CODENAME" >> $GITHUB_ENV
 
       - name: Compress AOSP Device Tree
+        if: contains(github.event.inputs.generation_type, 'device')
         run: |
           CODENAME=$CODENAME
           BRAND=$BRAND
@@ -241,6 +244,7 @@ jobs:
           cd $GITHUB_WORKSPACE
 
       - name: Compress Vendor Tree
+        if: contains(github.event.inputs.generation_type, 'vendor')
         run: |
           CODENAME=$CODENAME
           BRAND=$BRAND
@@ -254,26 +258,23 @@ jobs:
           rm -rf dump
 
       - name: Compress Recovery Device Tree
+        if: contains(github.event.inputs.generation_type, 'recovery')
         run: |
-          # Set variables for brand and codename (from environment or earlier steps)
           BRAND=$BRAND
           CODENAME=$CODENAME
-      
-          # Path to the recovery device tree
+
           RECOVERY_DT_PATH="recovery/device/$BRAND/$CODENAME"
-      
-          # Check if the recovery device tree exists
+
           if [ ! -d "$RECOVERY_DT_PATH" ]; then
             echo "[!] Recovery device tree not found at $RECOVERY_DT_PATH"
             exit 1
           fi
-      
-          # Compress the recovery device tree into a .zip file
+
           ZIP_PATH="$GITHUB_WORKSPACE/recovery_device_${BRAND}_${CODENAME}.zip"
           echo "[*] Compressing recovery device tree into $ZIP_PATH"
           cd "$RECOVERY_DT_PATH"
           7z a -tzip "$ZIP_PATH" ./*
-      
+
           echo "[*] Recovery device tree compressed successfully!"
 
       - name: Generate Tag
@@ -288,11 +289,10 @@ jobs:
           name: "Generated device trees for ${{ env.BRAND }} ${{ env.CODENAME }}"
           body: |
             Device Tree and Vendor Tree for ${{ env.CODENAME }}.
-
             - Brand: ${{ env.BRAND }}
             - Device Codename: ${{ env.CODENAME }}
+            - Generated trees: ${{ github.event.inputs.generation_type }}
             - Dumped ROM link: ${{ github.event.inputs.rom_url }}
-
           files: |
             android_device_*.zip
             recovery_device_*.zip
