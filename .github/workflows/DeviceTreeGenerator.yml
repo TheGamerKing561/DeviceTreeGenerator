@@ -313,7 +313,7 @@ jobs:
           if [[ -n "$CODENAME" && -n "$TWRP_CODENAME" && "$CODENAME" != "$TWRP_CODENAME" ]]; then
             TAG="${CODENAME}-${TWRP_CODENAME}-$(date +'%Y%m%d-%H%M')"
           else
-            TAG="${C_FINAL}-$(date +'%Y%m%d-%H%M')"
+            TAG="${CODENAME}-$(date +'%Y%m%d-%H%M')"
           fi
       
           echo "tag=$TAG" >> $GITHUB_OUTPUT
