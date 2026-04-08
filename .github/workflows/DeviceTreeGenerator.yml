@@ -51,9 +51,9 @@ jobs:
           pip3 install dumpyara aospdtgen twrpdtgen
 
       - name: Download and dump ROM with dumpyara
+        if: contains(github.event.inputs.generation_type, 'device') && github.event.inputs.rom_url != 'none'
         run: |
 
-          if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
             wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
 
             ROM_FILE=$(ls -t | head -n 1)
@@ -62,9 +62,7 @@ jobs:
             
             python3 -m dumpyara "$ROM_FILE" -o dump
             rm "$ROM_FILE"
-          else
-            echo "No ROM URL provided. Skipping ROM download and dump."
-          fi
+
 
       - name: Generate AOSP Device Tree with aospdtgen
         if: contains(github.event.inputs.generation_type, 'device')
