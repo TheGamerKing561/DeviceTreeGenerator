@@ -51,7 +51,7 @@ jobs:
           pip3 install dumpyara aospdtgen twrpdtgen
 
       - name: Download and dump ROM with dumpyara
-        if: contains(github.event.inputs.generation_type, 'device') && github.event.inputs.rom_url != 'none'
+        if: (contains(github.event.inputs.generation_type, 'device') || github.event.inputs.generation_type == 'recovery_only') && github.event.inputs.rom_url != 'none'
         run: |
 
             wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
