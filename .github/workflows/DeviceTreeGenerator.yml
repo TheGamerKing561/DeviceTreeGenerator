@@ -23,8 +23,8 @@ on:
         required: true
         default: true
         type: boolean    
-      recovery_image_path:
-        description: 'Direct link to custom recovery.img or boot.img for recovery device tree generation (Optional)'
+      recovery_image_url:
+        description: 'Direct link to custom recovery/boot/vendor_boot image for recovery device tree generation (optional, for "recovery_only")'
         required: false
         default: ""
 
@@ -183,42 +183,59 @@ jobs:
         id: twrp_dt
         run: |
           IMG=""
-          CUSTOM_IMAGE=${{ github.event.inputs.recovery_image_path }}
+          CUSTOM_IMAGE=${{ github.event.inputs.recovery_image_url }}
+          USED_CUSTOM_IMAGE="false"
       
-          if [ -n "${{ github.event.inputs.recovery_image_path }}" ]; then
+          if [ -n "$CUSTOM_IMAGE" ]; then
             echo "[*] Custom recovery image provided: $CUSTOM_IMAGE"
-      
-            # Download if it's a URL
+          
             if [[ "$CUSTOM_IMAGE" =~ ^https?:// ]]; then
               echo "[*] Downloading custom image..."
               mkdir -p custom
               wget -q "$CUSTOM_IMAGE" -O custom/custom_recovery.img
               CUSTOM_IMAGE="custom/custom_recovery.img"
             fi
-      
-            if [ -f dump/recovery.img ] || [ -f dump/boot.img ]; then
-              echo "[*] Both custom image and dumped ROM images are available. Using dumped ROM image for TWRP generation."
-            fi
-      
+          
             if [ -f dump/recovery.img ]; then
               IMG="dump/recovery.img"
               echo "[*] Using recovery.img from dumped ROM"
+            
+            elif [ -f dump/vendor_boot.img ]; then
+              IMG="dump/vendor_boot.img"
+              echo "[*] Using vendor_boot.img from dumped ROM"
+            
+            elif [ -f dump/init_boot.img ]; then
+              IMG="dump/init_boot.img"
+              echo "[*] Using init_boot.img from dumped ROM"
+            
             elif [ -f dump/boot.img ]; then
               IMG="dump/boot.img"
               echo "[*] Using boot.img from dumped ROM (fallback)"
+            
             else
               IMG="$CUSTOM_IMAGE"
+              USED_CUSTOM_IMAGE="true"
               echo "[*] Using provided custom image as fallback."
             fi
           else
             if [ -f dump/recovery.img ]; then
               IMG="dump/recovery.img"
               echo "[*] Using recovery.img from dumped ROM"
+          
+            elif [ -f dump/vendor_boot.img ]; then
+              IMG="dump/vendor_boot.img"
+              echo "[*] Using vendor_boot.img from dumped ROM"
+          
+            elif [ -f dump/init_boot.img ]; then
+              IMG="dump/init_boot.img"
+              echo "[*] Using init_boot.img from dumped ROM"
+          
             elif [ -f dump/boot.img ]; then
               IMG="dump/boot.img"
               echo "[*] Using boot.img from dumped ROM (fallback)"
+          
             else
-              echo "[*] No recovery/boot image found for TWRP generation"
+              echo "[*] No recovery/boot/vendor_boot/init_boot image found for TWRP generation"
               exit 0
             fi
           fi
@@ -251,6 +268,8 @@ jobs:
       
           echo "TWRP_BRAND=$TWRP_BRAND" >> $GITHUB_ENV
           echo "TWRP_CODENAME=$TWRP_CODENAME" >> $GITHUB_ENV
+          echo "USED_CUSTOM_IMAGE=$USED_CUSTOM_IMAGE" >> $GITHUB_ENV
+          echo "FINAL_IMG_USED=$IMG" >> $GITHUB_ENV
       
           # If BRAND/CODENAME are not set, use TWRP values
           if [ -z "${BRAND}" ]; then
@@ -325,6 +344,9 @@ jobs:
           TWRP_CODENAME="${{ env.TWRP_CODENAME }}"
           GENERATION_TYPE="${{ github.event.inputs.generation_type }}"
           ROM_URL="${{ github.event.inputs.rom_url }}"
+          USED_CUSTOM_IMAGE="${{ env.USED_CUSTOM_IMAGE }}"
+          CUSTOM_IMAGE_URL="${{ github.event.inputs.recovery_image_url }}"
+          FINAL_IMG_USED="${{ env.FINAL_IMG_USED }}"
       
           BODY="Generated Device Trees/Vendor Tree for $CODENAME.
           - Brand: $BRAND
@@ -337,6 +359,12 @@ jobs:
           - Detected recovery device brand: $TWRP_BRAND
           - Detected recovery device codename: $TWRP_CODENAME"
           fi
+
+          if [[ "$USED_CUSTOM_IMAGE" == "true" ]]; then
+            BODY="$BODY
+          - Used custom image (recovery/boot/vendor_boot) link for recovery device tree generation: $CUSTOM_IMAGE_URL"
+          fi
+
       
           echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
           echo "$BODY" >> $GITHUB_ENV
