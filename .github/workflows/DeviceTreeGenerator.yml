@@ -95,7 +95,7 @@ jobs:
 
             if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
               wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
-              ROM_FILE=$(ls -t | head -n 1)
+              ROM_FILE=$(ls -tp | grep -v '/$' | head -n 1)
 
               mkdir -p dump
 
