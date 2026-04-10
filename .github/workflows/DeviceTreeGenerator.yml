@@ -20,7 +20,7 @@ on:
           - device+recovery
           - device+vendor+recovery
       auto_fix_proprietary:
-        description: 'Run auto-fix for proprietary-files.txt'
+        description: 'Run auto-fix for proprietary-files.txt (if device tree is generated)'
         required: true
         default: true
         type: boolean    
@@ -29,7 +29,7 @@ on:
         required: false
         default: ""
       device_tree_repo:
-        description: 'Device tree repository (required for vendor_only)'
+        description: 'Device tree repository (required for vendor_only mode)'
         required: false
         default: ""
       device_tree_branch:
@@ -37,7 +37,7 @@ on:
         required: false
         default: "main"
       vendor_source_type:
-        description: 'Vendor blobs extraction source type (vendor_only mode)'
+        description: 'Vendor blobs extraction source type (required for vendor_only mode)'
         required: false
         default: "dump_rom"
         type: choice
@@ -144,6 +144,13 @@ jobs:
             "${{ github.event.inputs.device_tree_repo }}" \
             android/device/tmpdt
 
+            cd android/device/tmpdt
+
+            COMMIT_ID=$(git rev-parse HEAD)
+            COMMIT_TITLE=$(git log -1 --pretty=%s)
+
+            echo "COMMIT_ID=$COMMIT_ID" >> $GITHUB_ENV
+            echo "COMMIT_TITLE=$COMMIT_TITLE" >> $GITHUB_ENV
             echo "USED_DEVICE_TREE_REPO=true" >> $GITHUB_ENV
             echo "DEVICE_TREE_REPO=${{ github.event.inputs.device_tree_repo }}" >> $GITHUB_ENV
             echo "DEVICE_TREE_BRANCH=${{ github.event.inputs.device_tree_branch }}" >> $GITHUB_ENV
@@ -553,7 +560,8 @@ jobs:
           if [ "${{ env.USED_DEVICE_TREE_REPO }}" == "true" ]; then
             BODY="$BODY
           - Device Tree Repository: ${{ env.DEVICE_TREE_REPO }}
-          - Device Tree Branch: ${{ env.DEVICE_TREE_BRANCH }}"
+          - Device Tree Branch: ${{ env.DEVICE_TREE_BRANCH }}
+          - Device Tree Commit: [${{ env.COMMIT_ID }}](${{ github.event.inputs.device_tree_repo }}/commit/${{ env.COMMIT_ID }}) [${{ env.COMMIT_TITLE }}]"
           fi
 
           if [ "${{ env.USED_CUSTOM_ZIP }}" == "true" ]; then
