@@ -15,6 +15,7 @@ on:
         options:
           - device_only
           - recovery_only
+          - vendor_only
           - device+vendor
           - device+recovery
           - device+vendor+recovery
@@ -27,6 +28,26 @@ on:
         description: 'Direct link to custom recovery/boot/vendor_boot image for recovery device tree generation (optional, for "recovery_only")'
         required: false
         default: ""
+            device_tree_repo:
+        description: 'Device tree repository (required for vendor_only)'
+        required: false
+        default: ""
+      device_tree_branch:
+        description: 'Device tree branch (default: main)'
+        required: false
+        default: "main"
+      vendor_source_type:
+        description: 'Vendor source type (vendor_only)'
+        required: false
+        default: "dump_rom"
+        type: choice
+        options:
+          - dump_rom
+          - direct_zip
+      vendor_only_zip_url:
+        description: 'Direct custom ROM zip (used when vendor_source_type = direct_zip)'
+        required: false
+        default: ""  
 
 jobs:
   generate:
@@ -50,19 +71,80 @@ jobs:
 
           pip3 install dumpyara aospdtgen twrpdtgen
 
-      - name: Download and dump ROM with dumpyara
-        if: (contains(github.event.inputs.generation_type, 'device') || github.event.inputs.generation_type == 'recovery_only') && github.event.inputs.rom_url != 'none'
+      - name: Prepare ROM / Vendor Source
         run: |
 
-            wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
+          mkdir -p dump
 
+          # =========================
+          # DEVICE / RECOVERY / device+vendor (ROM dump path)
+          # =========================
+          if [ "${{ github.event.inputs.generation_type }}" != "vendor_only" ]; then
+
+            if [ "${{ github.event.inputs.rom_url }}" != "none" ]; then
+              wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
+              ROM_FILE=$(ls -t | head -n 1)
+
+              python3 -m dumpyara "$ROM_FILE" -o dump
+              rm "$ROM_FILE"
+
+              echo "USED_ROM_URL=true" >> $GITHUB_ENV
+            fi
+          fi
+
+          # =========================
+          # VENDOR_ONLY: dump_rom mode
+          # =========================
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ] && \
+             [ "${{ github.event.inputs.vendor_source_type }}" == "dump_rom" ]; then
+
+            if [ "${{ github.event.inputs.rom_url }}" == "none" ]; then
+              echo "ERROR: rom_url required for vendor_only + dump_rom"
+              exit 1
+            fi
+
+            wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
             ROM_FILE=$(ls -t | head -n 1)
 
-            mkdir -p dump
-            
             python3 -m dumpyara "$ROM_FILE" -o dump
             rm "$ROM_FILE"
 
+            echo "USED_ROM_URL=true" >> $GITHUB_ENV
+          fi
+
+          # =========================
+          # VENDOR_ONLY: direct_zip mode (NO EXTRACTION)
+          # =========================
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ] && \
+             [ "${{ github.event.inputs.vendor_source_type }}" == "direct_zip" ]; then
+
+            if [ -z "${{ github.event.inputs.vendor_only_zip_url }}" ]; then
+              echo "ERROR: vendor_only_zip_url required for direct_zip"
+              exit 1
+            fi
+
+            wget -q "${{ github.event.inputs.vendor_only_zip_url }}" -O dump/rom.zip
+
+            echo "USED_CUSTOM_ZIP=true" >> $GITHUB_ENV
+            echo "CUSTOM_ZIP_URL=${{ github.event.inputs.vendor_zip_url }}" >> $GITHUB_ENV
+          fi
+
+      - name: Clone Device Tree (vendor_only mode)
+        if: github.event.inputs.generation_type == 'vendor_only'
+        run: |
+          if [ -z "${{ github.event.inputs.device_tree_repo }}" ]; then
+            echo "Device tree repo is required for vendor_only!"
+            exit 1
+          fi
+
+          mkdir -p android/device
+          git clone --branch "${{ github.event.inputs.device_tree_branch }}" \
+            "${{ github.event.inputs.device_tree_repo }}" \
+            android/device/tmpdt
+
+            echo "USED_DEVICE_TREE_REPO=true" >> $GITHUB_ENV
+            echo "DEVICE_TREE_REPO=${{ github.event.inputs.device_tree_repo }}" >> $GITHUB_ENV
+            echo "DEVICE_TREE_BRANCH=${{ github.event.inputs.device_tree_branch }}" >> $GITHUB_ENV
 
       - name: Generate AOSP Device Tree with aospdtgen
         if: contains(github.event.inputs.generation_type, 'device')
@@ -72,39 +154,87 @@ jobs:
           python3 -m aospdtgen dump -o android/device/tmp/device
 
       - name: Detect Device Info and Relocate Device Tree
-        if: contains(github.event.inputs.generation_type, 'device')
         id: detect_device_info
         run: |
+
           BASE="android/device/tmp"
 
-          DT_PATH=$(find "$BASE" -mindepth 1 -maxdepth 2 -type d | head -n 1)
+          # =========================
+          # DEVICE TREE MODE (existing)
+          # =========================
+          if [ "${{ github.event.inputs.generation_type }}" != "vendor_only" ]; then
 
-          if [ -z "$DT_PATH" ]; then
-            echo "Device tree not found!"
-            exit 1
+            DT_PATH=$(find "$BASE" -mindepth 1 -maxdepth 2 -type d | head -n 1)
+
+            if [ -z "$DT_PATH" ]; then
+              echo "Device tree not found!"
+              exit 1
+            fi
+
+            BOARD_CONFIG="$DT_PATH/BoardConfig.mk"
+
+            DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
+
+            BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
+            CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
+
           fi
 
-          BOARD_CONFIG="$DT_PATH/BoardConfig.mk"
+          # =========================
+          # VENDOR_ONLY MODE
+          # =========================
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ]; then
 
-          if [ ! -f "$BOARD_CONFIG" ]; then
-            echo "BoardConfig.mk not found!"
-            exit 1
+            FILE=$(find android/device/tmpdt -name extract-files.py | head -n 1)
+
+            if [ -z "$FILE" ]; then
+              echo "extract-files.py not found!"
+              exit 1
+            fi
+
+            # primary method (module args)
+            CODENAME=$(grep -oP "ExtractUtilsModule\(\s*'\K[^']+" "$FILE" | head -n 1)
+            BRAND=$(grep -oP "ExtractUtilsModule\(\s*'[^']+',\s*'\K[^']+" "$FILE" | head -n 1)
+
+            # =========================
+            # FALLBACK: namespace_imports
+            # =========================
+            if [ -z "$CODENAME" ] || [ -z "$BRAND" ]; then
+              NAMESPACE=$(grep -oP "device/\{\{\s*device_info\.manufacturer\s*\}\}/\{\{\s*device_info\.codename\s*\}\}" "$FILE" | head -n 1)
+
+              if [ -n "$NAMESPACE" ]; then
+                # cannot fully resolve dynamically → rely on directory name fallback
+                echo "[*] Using namespace fallback parsing"
+
+                CODENAME=$(basename "$(dirname "$FILE")")
+                BRAND=$(basename "$(dirname "$(dirname "$FILE")")")
+              fi
+            fi
+
+            if [ -z "$CODENAME" ] || [ -z "$BRAND" ]; then
+              echo "Failed to detect device info!"
+              exit 1
+            fi
+
+            echo "Detected device info (vendor_only mode): $BRAND / $CODENAME"
           fi
 
-          DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
-
-          BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
-          CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
-
+          # =========================
+          # EXPORT (shared)
+          # =========================
           echo "BRAND=$BRAND" >> $GITHUB_ENV
           echo "CODENAME=$CODENAME" >> $GITHUB_ENV
 
           FINAL_PATH="android/device/$BRAND/$CODENAME"
           mkdir -p "android/device/$BRAND"
 
-          mv "$DT_PATH" "$FINAL_PATH"
-
-          rm -rf "$BASE"
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ]; then
+            mv android/device/tmpdt "$FINAL_PATH"
+          else
+            DT_PATH=$(find "$BASE" -mindepth 1 -maxdepth 2 -type d | head -n 1)
+            mv "$DT_PATH" "$FINAL_PATH"
+            rm -rf "$BASE"
+          fi
 
       - name: Auto-fix proprietary-files.txt
         if: contains(github.event.inputs.generation_type, 'device') && github.event.inputs.auto_fix_proprietary == 'true'
@@ -170,13 +300,43 @@ jobs:
       - name: Extract Vendor Blobs
         if: contains(github.event.inputs.generation_type, 'vendor')
         run: |
-          CODENAME=$CODENAME
-          BRAND=$BRAND
+          set -e
 
-          cd android/device/$BRAND/$CODENAME
-          export PYTHONPATH=$GITHUB_WORKSPACE/android/tools/extract-utils
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ]; then
+            DEVICE_DIR=$(find android/device/$BRAND -maxdepth 2 -type d -name "$CODENAME" | head -n 1)
+          else
+            DEVICE_DIR="android/device/$BRAND/$CODENAME"
+          fi
 
-          python3 extract-files.py "$GITHUB_WORKSPACE/dump"
+          if [ ! -d "$DEVICE_DIR" ]; then
+            echo "Device directory not found: $DEVICE_DIR"
+            exit 1
+          fi
+
+          cd "$DEVICE_DIR"
+          export PYTHONPATH="$GITHUB_WORKSPACE/android/tools/extract-utils"
+
+          # =========================
+          # INPUT SOURCE SELECTION
+          # =========================
+
+          if [ "${{ github.event.inputs.generation_type }}" == "vendor_only" ] && \
+             [ "${{ github.event.inputs.vendor_source_type }}" == "direct_zip" ]; then
+
+            INPUT_SOURCE="dump/rom.zip"
+
+            if [ ! -f "$GITHUB_WORKSPACE/$INPUT_SOURCE" ]; then
+              echo "ERROR: vendor.zip not found at $GITHUB_WORKSPACE/$INPUT_SOURCE"
+              exit 1
+            fi
+
+            INPUT_SOURCE="$GITHUB_WORKSPACE/$INPUT_SOURCE"
+
+          else
+            INPUT_SOURCE="$GITHUB_WORKSPACE/dump"
+          fi
+
+          python3 extract-files.py "$INPUT_SOURCE"
 
       - name: Generate TWRP Device Tree with twrpdtgen
         if: contains(github.event.inputs.generation_type, 'recovery')
@@ -344,28 +504,34 @@ jobs:
           TWRP_CODENAME="${{ env.TWRP_CODENAME }}"
           GENERATION_TYPE="${{ github.event.inputs.generation_type }}"
           ROM_URL="${{ github.event.inputs.rom_url }}"
-          USED_CUSTOM_IMAGE="${{ env.USED_CUSTOM_IMAGE }}"
-          CUSTOM_IMAGE_URL="${{ github.event.inputs.recovery_image_url }}"
-          FINAL_IMG_USED="${{ env.FINAL_IMG_USED }}"
-      
-          BODY="Generated Device Trees/Vendor Tree for $CODENAME.
+
+          BODY="Generated Device Trees / Vendor Tree for $CODENAME.
           - Brand: $BRAND
           - Device Codename: $CODENAME
-          - Generated trees: $GENERATION_TYPE
-          - Dumped ROM link: $ROM_URL"
-      
-          if [[ "$BRAND" != "$TWRP_BRAND" || "$CODENAME" != "$TWRP_CODENAME" ]]; then
+          - Generation Type: $GENERATION_TYPE"
+
+          if [ "${{ env.USED_ROM_URL }}" == "true" ]; then
             BODY="$BODY
-          - Detected recovery device brand: $TWRP_BRAND
-          - Detected recovery device codename: $TWRP_CODENAME"
+          - Dumped ROM Source: $ROM_URL"
           fi
 
-          if [[ "$USED_CUSTOM_IMAGE" == "true" ]]; then
+          if [ "${{ env.USED_DEVICE_TREE_REPO }}" == "true" ]; then
             BODY="$BODY
-          - Used custom image (recovery/boot/vendor_boot) link for recovery device tree generation: $CUSTOM_IMAGE_URL"
+          - Device Tree Repository: ${{ env.DEVICE_TREE_REPO }}
+          - Device Tree Branch: ${{ env.DEVICE_TREE_BRANCH }}"
           fi
 
-      
+          if [ "${{ env.USED_CUSTOM_ZIP }}" == "true" ]; then
+            BODY="$BODY
+          - Link to Custom ROM ZIP used for extracting vendor blobs: ${{ env.CUSTOM_ZIP_URL }}"
+          fi
+
+          if [ -n "$TWRP_BRAND" ] && [ "$TWRP_BRAND" != "$BRAND" ]; then
+            BODY="$BODY
+          - Recovery Device Brand: $TWRP_BRAND
+          - Recovery Device Codename: $TWRP_CODENAME"
+          fi
+
           echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
           echo "$BODY" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
