@@ -3,6 +3,14 @@ name: Generate Device Tree/Vendor Tree
 on:
   workflow_dispatch:
     inputs:
+      dumper_tool:
+        description: 'Choose dumping tool'
+        required: true
+        default: "dumpyara"
+        type: choice
+        options:
+          - dumpyara
+          - dumprx
       rom_url:
         description: 'Direct stock ROM download link (Default: none)'
         required: true
@@ -71,6 +79,12 @@ jobs:
 
           pip3 install dumpyara aospdtgen twrpdtgen
 
+          # Install DumprX
+          git clone https://github.com/DumprX/DumprX.git
+          cd DumprX
+          ./setup.sh
+          cd ..
+
       - name: Prepare ROM / Vendor Source
         run: |
 
@@ -85,7 +99,25 @@ jobs:
 
               mkdir -p dump
 
-              python3 -m dumpyara "$ROM_FILE" -o dump
+              echo "Using dumper: ${{ github.event.inputs.dumper_tool }}"
+
+              if [ "${{ github.event.inputs.dumper_tool }}" == "dumprx" ]; then
+
+                echo "[*] Running DumprX..."
+                ./DumprX/dumper.sh "$ROM_FILE"
+
+                echo "[*] Moving DumprX output to dump folder..."
+                cp -r DumprX/out/* dump/
+
+                # Cleanup
+                rm -rf DumprX/out
+
+              else
+
+                echo "[*] Running dumpyara..."
+                python3 -m dumpyara "$ROM_FILE" -o dump
+
+              fi
               rm "$ROM_FILE"
 
               echo "USED_ROM_URL=true" >> $GITHUB_ENV
@@ -108,7 +140,25 @@ jobs:
 
             mkdir -p dump
 
-            python3 -m dumpyara "$ROM_FILE" -o dump
+            echo "Using dumper: ${{ github.event.inputs.dumper_tool }}"
+
+              if [ "${{ github.event.inputs.dumper_tool }}" == "dumprx" ]; then
+
+                echo "[*] Running DumprX..."
+                ./DumprX/dumper.sh "$ROM_FILE"
+
+                echo "[*] Moving DumprX output to dump folder..."
+                cp -r DumprX/out/* dump/
+
+                # Cleanup
+                rm -rf DumprX/out
+
+              else
+
+                echo "[*] Running dumpyara..."
+                python3 -m dumpyara "$ROM_FILE" -o dump
+
+              fi
             rm "$ROM_FILE"
 
             echo "USED_ROM_URL=true" >> $GITHUB_ENV
