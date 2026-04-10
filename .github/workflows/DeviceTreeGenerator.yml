@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       rom_url:
-        description: 'Direct ROM download link (Default: none)'
+        description: 'Direct stock ROM download link (Default: none)'
         required: true
         default: "none"
       generation_type:
@@ -28,7 +28,7 @@ on:
         description: 'Direct link to custom recovery/boot/vendor_boot image for recovery device tree generation (optional, for "recovery_only")'
         required: false
         default: ""
-            device_tree_repo:
+      device_tree_repo:
         description: 'Device tree repository (required for vendor_only)'
         required: false
         default: ""
@@ -45,7 +45,7 @@ on:
           - dump_rom
           - direct_zip
       vendor_only_zip_url:
-        description: 'Direct custom ROM zip (used when vendor_source_type = direct_zip)'
+        description: 'Direct link to custom ROM zip for extracting vendor blobs (used when vendor_source_type = direct_zip)'
         required: false
         default: ""  
 
@@ -126,7 +126,7 @@ jobs:
             wget -q "${{ github.event.inputs.vendor_only_zip_url }}" -O dump/rom.zip
 
             echo "USED_CUSTOM_ZIP=true" >> $GITHUB_ENV
-            echo "CUSTOM_ZIP_URL=${{ github.event.inputs.vendor_zip_url }}" >> $GITHUB_ENV
+            echo "CUSTOM_ZIP_URL=${{ github.event.inputs.vendor_only_zip_url }}" >> $GITHUB_ENV
           fi
 
       - name: Clone Device Tree (vendor_only mode)
