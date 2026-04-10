@@ -37,7 +37,7 @@ on:
         required: false
         default: "main"
       vendor_source_type:
-        description: 'Vendor source type (vendor_only)'
+        description: 'Vendor blobs extraction source type (vendor_only mode)'
         required: false
         default: "dump_rom"
         type: choice
@@ -157,6 +157,7 @@ jobs:
 
       - name: Detect Device Info and Relocate Device Tree
         id: detect_device_info
+        if: github.event.inputs.generation_type != 'recovery_only'
         run: |
 
           BASE="android/device/tmp"
@@ -199,17 +200,20 @@ jobs:
             BRAND=$(grep -oP "ExtractUtilsModule\(\s*'[^']+',\s*'\K[^']+" "$FILE" | head -n 1)
 
             # =========================
-            # FALLBACK: namespace_imports
+            # FALLBACK: BoardConfig.mk DEVICE_PATH
             # =========================
             if [ -z "$CODENAME" ] || [ -z "$BRAND" ]; then
-              NAMESPACE=$(grep -oP "device/\{\{\s*device_info\.manufacturer\s*\}\}/\{\{\s*device_info\.codename\s*\}\}" "$FILE" | head -n 1)
-
-              if [ -n "$NAMESPACE" ]; then
-                # cannot fully resolve dynamically → rely on directory name fallback
-                echo "[*] Using namespace fallback parsing"
-
-                CODENAME=$(basename "$(dirname "$FILE")")
-                BRAND=$(basename "$(dirname "$(dirname "$FILE")")")
+              echo "[!] ExtractUtilsModule parsing failed, trying BoardConfig.mk DEVICE_PATH fallback"
+            
+              BOARD_CONFIG=$(find android/device/tmpdt -name BoardConfig.mk | head -n 1)
+            
+              if [ -n "$BOARD_CONFIG" ]; then
+                DEVICE_PATH=$(grep -m1 "DEVICE_PATH" "$BOARD_CONFIG" | cut -d= -f2 | tr -d ' ')
+            
+                if [ -n "$DEVICE_PATH" ]; then
+                  BRAND=$(echo "$DEVICE_PATH" | cut -d/ -f2)
+                  CODENAME=$(echo "$DEVICE_PATH" | cut -d/ -f3)
+                fi
               fi
             fi
 
@@ -218,7 +222,7 @@ jobs:
               exit 1
             fi
 
-            echo "Detected device info (vendor_only mode): $BRAND / $CODENAME"
+            echo "Detected device info: $BRAND / $CODENAME"
           fi
 
           # =========================
